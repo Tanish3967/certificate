@@ -4,3 +4,5 @@ requests-oauthlib
 pillow
 reportlab
 pypdf2
+python-docx
+
