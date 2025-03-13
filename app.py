@@ -126,8 +126,23 @@ if "role" not in st.session_state:
     role = st.selectbox("Select your role:", ["Student", "Teacher", "Admin"])
     st.session_state["role"] = role
 
-# Google OAuth login for Students & Teachers
-if st.session_state["role"] in ["Student", "Teacher"]:
+# Separate authentication flows based on role
+if st.session_state["role"] == "Admin":
+    # Admin Manual Login - completely separate from OAuth flow
+    with st.form(key="admin_login_form"):
+        admin_username = st.text_input("Admin Username")
+        admin_password = st.text_input("Admin Password", type="password")
+        submit_button = st.form_submit_button("Login as Admin")
+    
+    if submit_button:
+        if admin_username == "admin" and admin_password == "admin123":
+            st.session_state["admin_logged_in"] = True
+            st.success("✅ Logged in as Admin!")
+        else:
+            st.error("❌ Incorrect admin credentials!")
+
+# Google OAuth login ONLY for Students & Teachers
+elif st.session_state["role"] in ["Student", "Teacher"]:
     if "token" not in st.session_state:
         google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
         authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
@@ -146,20 +161,6 @@ if st.session_state["role"] in ["Student", "Teacher"]:
             st.session_state["user"] = user_info
         except Exception as e:
             st.error(f"OAuth Error: {e}")
-
-# Manual Login for Admins Only
-elif st.session_state["role"] == "Admin":
-    with st.form(key="admin_login_form"):
-        admin_username = st.text_input("Admin Username")
-        admin_password = st.text_input("Admin Password", type="password")
-        submit_button = st.form_submit_button("Login as Admin")
-    
-    if submit_button:
-        if admin_username == "admin" and admin_password == "admin123":
-            st.session_state["admin_logged_in"] = True
-            st.success("✅ Logged in as Admin!")
-        else:
-            st.error("❌ Incorrect admin credentials!")
 
 # Display User Info or Admin Dashboard
 if "user" in st.session_state or "admin_logged_in" in st.session_state:
