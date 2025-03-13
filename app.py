@@ -4,7 +4,9 @@ import requests
 from requests_oauthlib import OAuth2Session
 from io import BytesIO
 from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter, A4, landscape
 from datetime import datetime
+import os
 
 # Initialize session state variables
 if "role" not in st.session_state:
@@ -127,6 +129,66 @@ def request_leave(email, leave_type, start_date, end_date, reason):
     conn.close()
     return f"✅ Leave request submitted! {new_leave_balance} leaves remaining."
 
+# Generate certificate based on type
+def generate_certificate(user_name, user_role, cert_type):
+    pdf_buffer = BytesIO()
+    c = canvas.Canvas(pdf_buffer, pagesize=landscape(A4))
+    
+    # Set up the certificate based on type
+    if cert_type == "NOC":
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(420, 400, "No Objection Certificate")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 350, f"This is to certify that")
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(420, 320, f"{user_name}")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 290, f"has no objection from the institution")
+        c.drawCentredString(420, 260, f"to pursue further studies or employment.")
+    
+    elif cert_type == "Bonafide":
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(420, 400, "Bonafide Certificate")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 350, f"This is to certify that")
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(420, 320, f"{user_name}")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 290, f"is a bonafide student of this institution")
+        c.drawCentredString(420, 260, f"for the academic year 2024-2025.")
+    
+    elif cert_type == "Leaving":
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(420, 400, "Leaving Certificate")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 350, f"This is to certify that")
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(420, 320, f"{user_name}")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 290, f"has completed all requirements")
+        c.drawCentredString(420, 260, f"and is permitted to leave the institution.")
+    
+    else:  # Achievement Certificate (default)
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(420, 400, "Certificate of Achievement")
+        c.setFont("Helvetica", 20)
+        c.drawCentredString(420, 350, f"Awarded to:")
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(420, 320, f"{user_name}")
+        c.setFont("Helvetica", 18)
+        c.drawCentredString(420, 290, f"Role: {user_role}")
+    
+    # Add date and signature
+    c.setFont("Helvetica", 12)
+    current_date = datetime.now().strftime("%B %d, %Y")
+    c.drawCentredString(420, 200, f"Date: {current_date}")
+    c.drawCentredString(420, 150, "____________________")
+    c.drawCentredString(420, 130, "Principal's Signature")
+    
+    c.save()
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
 # Initialize database
 initialize_db()
 
@@ -144,7 +206,7 @@ st.title("🎓 Role-Based Sign-In & Leave System")
 if st.sidebar.button("Reset Session"):
     reset_app()
 
-# Handle authentication flow
+# Check for OAuth code in URL
 if "code" in st.query_params and not st.session_state.authenticated:
     try:
         # Create OAuth session
@@ -203,7 +265,7 @@ if not st.session_state.authenticated and not st.session_state.admin_logged_in:
                 st.error("❌ Invalid admin credentials")
     
     elif st.session_state.role in ["Student", "Teacher"]:
-        # Google OAuth Login - ensure access_type=offline to prevent invalid_grant errors
+        # Google OAuth Login - with fixes for invalid_grant error
         flow = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
         authorization_url, state = flow.authorization_url(
             AUTHORIZATION_BASE_URL,
@@ -257,20 +319,22 @@ if st.session_state.authenticated and st.session_state.user:
                 st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
     
     else:  # For Students, show both certificate and leave application
-        # Certificate Generation
+        # Certificate Generation with multiple types
+        st.subheader("📄 Certificate Generation")
+        
+        cert_type = st.selectbox(
+            "Select Certificate Type:", 
+            ["Achievement Certificate", "NOC", "Bonafide", "Leaving"]
+        )
+        
         if st.button("Generate Certificate"):
-            pdf_buffer = BytesIO()
-            c = canvas.Canvas(pdf_buffer)
-            c.setFont("Helvetica", 30)
-            c.drawString(200, 700, "Certificate of Achievement")
-            c.setFont("Helvetica", 20)
-            c.drawString(220, 650, f"Awarded to: {user_name}")
-            c.setFont("Helvetica", 15)
-            c.drawString(220, 600, f"Role: {user_role}")
-            c.save()
-
-            pdf_buffer.seek(0)
-            st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
+            pdf_buffer = generate_certificate(user_name, user_role, cert_type)
+            st.download_button(
+                label="📄 Download Certificate", 
+                data=pdf_buffer, 
+                file_name=f"{cert_type.lower().replace(' ', '_')}_certificate.pdf", 
+                mime="application/pdf"
+            )
         
         # Leave Application
         if st.button("🏖 Apply for Leave"):
