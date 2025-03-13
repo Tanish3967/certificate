@@ -38,7 +38,7 @@ if st.session_state.user is None:
     
     request_uri = client.prepare_request_uri(
         authorization_endpoint,
-        redirect_uri="http://localhost:8501",
+        redirect_uri="https://certificate-generator-1.streamlit.app/",
         scope=["openid", "email", "profile"],
     )
     
