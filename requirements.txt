@@ -4,3 +4,4 @@ oauthlib
 requests-oauthlib
 pillow
 reportlab
+sqlite3
