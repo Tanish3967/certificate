@@ -147,7 +147,7 @@ if st.session_state["role"] in ["Student", "Teacher"]:
         except Exception as e:
             st.error(f"OAuth Error: {e}")
 
-# Manual Login for Admin
+# Manual Login for Admins Only
 elif st.session_state["role"] == "Admin":
     admin_username = st.text_input("Admin Username")
     admin_password = st.text_input("Admin Password", type="password")
@@ -159,24 +159,26 @@ elif st.session_state["role"] == "Admin":
         else:
             st.error("❌ Incorrect admin credentials!")
 
-# Display User Info
+# Display User Info or Admin Dashboard
 if "user" in st.session_state or "admin_logged_in" in st.session_state:
+    
+    # For Students and Teachers Logged In via Google OAuth
     if "user" in st.session_state:
-        user = st.session_state["user"]
-        user_email = user["email"]
-        user_name = user["name"]
-
-        # Assign role dynamically
-        role = "Student" if user_email.startswith("220") and "@kiit.ac.in" in user_email else "Teacher"
-
-        save_user(user_name, user_email, role)
+        user_email = st.session_state["user"]["email"]
+        user_name = st.session_state["user"]["name"]
+        
+        # Assign role dynamically based on email pattern
+        role_assigned = "Student" if user_email.startswith("220") and "@kiit.ac.in" in user_email else "Teacher"
+        
+        save_user(user_name, user_email, role_assigned)
+        
         user_role, leave_balance = get_user_info(user_email)
-
+        
         # Display User Info
         st.success(f"✅ Logged in as {user_name} ({user_email})")
         st.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
-
-        # Certificate Generation
+        
+        # Certificate Generation Option
         if st.button("Generate Certificate"):
             pdf_buffer = BytesIO()
             c = canvas.Canvas(pdf_buffer)
@@ -196,18 +198,16 @@ if "user" in st.session_state or "admin_logged_in" in st.session_state:
             st.session_state["show_leave_form"] = False
 
         if st.button("🏖 Apply for Leave"):
-            st.session_state["show_leave_form"] = not st.session_state["show_leave_form"]
+            st.session_state["show_leave_form"] ^= True
 
         if st.session_state["show_leave_form"]:
             st.subheader("📅 Leave Application Form")
+            
             leave_type = st.selectbox("Leave Type", ["Sick Leave", "Casual Leave", "Vacation"])
             start_date = st.date_input("Start Date")
             end_date = st.date_input("End Date")
-            reason = st.text_area("Reason for Leave")
+            
+            reason_for_leave_request=st.text_area('Reason')
+            
+            
 
-            if st.button("Submit Leave Request"):
-                if end_date < start_date:
-                    st.error("❌ Invalid leave dates.")
-                else:
-                    message = request_leave(user_email, leave_type, start_date, end_date, reason)
-                    st.success(message)
