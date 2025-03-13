@@ -1,6 +1,5 @@
 import streamlit as st
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+from weasyprint import HTML
 from io import BytesIO
 
 # Sample inbuilt data (mock database)
@@ -9,24 +8,37 @@ data = {
     "67890": {"name": "Jane Smith", "role": "Employee", "cert_type": "NOC"},
 }
 
+# Function to generate PDF using WeasyPrint
 def generate_certificate(user_id):
     if user_id not in data:
         return None
-    
+
     user = data[user_id]
-    buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    pdf.setFont("Helvetica-Bold", 24)
-    pdf.drawCentredString(300, 750, f"{user['cert_type']} Certificate")
-    
-    pdf.setFont("Helvetica", 16)
-    pdf.drawString(100, 700, f"This is to certify that {user['name']}")
-    pdf.drawString(100, 670, f"holding ID {user_id} is a {user['role']}.")
-    
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
-    return buffer
+
+    # HTML template for the certificate
+    html_content = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; text-align: center; }}
+            .title {{ font-size: 24px; font-weight: bold; }}
+            .content {{ font-size: 18px; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="title">{user['cert_type']} Certificate</div>
+        <div class="content">
+            This is to certify that <b>{user['name']}</b> <br>
+            holding ID <b>{user_id}</b> is a <b>{user['role']}</b>.
+        </div>
+    </body>
+    </html>
+    """
+
+    # Convert HTML to PDF
+    pdf_bytes = HTML(string=html_content).write_pdf()
+
+    return BytesIO(pdf_bytes)
 
 # Streamlit UI
 st.title("AI Certificate Generator")
