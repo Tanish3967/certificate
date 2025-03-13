@@ -7,57 +7,124 @@ from PIL import Image
 from io import BytesIO
 from reportlab.pdfgen import canvas
 
-# Database File Path
-DB_FILE = "users.db"
+# Load Secrets
+CLIENT_ID = st.secrets["oauth"]["client_id"]
+CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
+REDIRECT_URI = st.secrets["oauth"]["redirect_uri"]
+DB_FILE = st.secrets["database"]["db_path"]
 
-# Function to Initialize Database
+# Google OAuth2 URLs
+AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
+
+# Database Setup
 def init_db():
-    if not os.path.exists(DB_FILE):
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                email TEXT UNIQUE,
-                role TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-
-# Initialize Database
-init_db()
-
-# Function to Save User in DB
-def save_user(name, email, role):
+    """Initialize the database and create necessary tables."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (name, email, role) VALUES (?, ?, ?)", (name, email, role))
+
+    # Create users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            email TEXT UNIQUE,
+            role TEXT,
+            leave_balance INTEGER DEFAULT 10
+        )
+    ''')
+
+    # Create leave_requests table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS leave_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            leave_type TEXT,
+            start_date TEXT,
+            end_date TEXT,
+            reason TEXT,
+            status TEXT DEFAULT 'Pending',
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
-# Function to Get Role from Email
+# Initialize the database
+init_db()
+
+def save_user(name, email, role):
+    """Save user details in the database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Check if user exists
+    cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+    user = cursor.fetchone()
+    
+    if not user:
+        # Insert new user
+        leave_balance = 10 if role == "Student" else 20
+        cursor.execute("INSERT INTO users (name, email, role, leave_balance) VALUES (?, ?, ?, ?)", 
+                       (name, email, role, leave_balance))
+        conn.commit()
+
+    conn.close()
+
 def get_role(email):
-    """Check if the email belongs to a Student or Faculty"""
+    """Determine if the email belongs to a Student or Faculty."""
     if email.startswith("220") and email.endswith("@kiit.ac.in"):
         return "Student"
     elif email.endswith("@kiit.ac.in"):
         return "Faculty"
     return "Unknown"
 
-# Load OAuth Credentials from Streamlit Secrets
-CLIENT_ID = st.secrets["oauth"]["client_id"]
-CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
-REDIRECT_URI = st.secrets["oauth"]["redirect_uri"]
+def get_user_leave_balance(email):
+    """Retrieve user's leave balance from the database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT leave_balance FROM users WHERE email = ?", (email,))
+    leave_balance = cursor.fetchone()
+    conn.close()
+    
+    return leave_balance[0] if leave_balance else None
 
-# OAuth2 URLs
-AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
+def apply_leave(email, leave_type, start_date, end_date, reason):
+    """Apply for leave and deduct leave balance if available."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # Get user ID and leave balance
+    cursor.execute("SELECT id, leave_balance FROM users WHERE email = ?", (email,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return "User not found"
+
+    user_id, leave_balance = user
+
+    # Check if leave balance is sufficient
+    if leave_balance <= 0:
+        conn.close()
+        return "Insufficient leave balance"
+
+    # Insert leave request
+    cursor.execute("INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, reason) VALUES (?, ?, ?, ?, ?)", 
+                   (user_id, leave_type, start_date, end_date, reason))
+    
+    # Deduct leave balance
+    cursor.execute("UPDATE users SET leave_balance = leave_balance - 1 WHERE id = ?", (user_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    return "Leave request submitted successfully"
 
 # Streamlit UI
-st.title("🎓 Google Sign-In & Certificate Generator")
+st.title("🎓 Google Sign-In, Certificate & Leave System")
 
 # Step 1: Generate Google OAuth2 Login URL
 if "token" not in st.session_state:
@@ -67,9 +134,8 @@ if "token" not in st.session_state:
     st.markdown(f"[🔑 Login with Google]({authorization_url})", unsafe_allow_html=True)
 
 # Step 2: Handle OAuth Callback
-query_params = st.query_params
-if "code" in query_params:
-    code = query_params["code"]
+if "code" in st.query_params:
+    code = st.query_params["code"]
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
     
     try:
@@ -82,7 +148,7 @@ if "code" in query_params:
     except Exception as e:
         st.error(f"OAuth Error: {e}")
 
-# Step 3: Display User Info, Role & Generate Certificate
+# Step 3: Display User Info, Role & Leave System
 if "user" in st.session_state:
     user = st.session_state["user"]
     user_email = user["email"]
@@ -95,14 +161,22 @@ if "user" in st.session_state:
     st.success(f"✅ Logged in as {user_name} ({user_email})")
     st.info(f"**Role: {user_role}**")
 
-    # Display User Profile Image
-    image_url = user.get("picture", "")
-    if image_url:
-        response = requests.get(image_url)
-        img = Image.open(BytesIO(response.content))
-        st.image(img, width=100, caption="Google Profile Picture")
+    # Fetch leave balance
+    leave_balance = get_user_leave_balance(user_email)
+    st.info(f"**Remaining Leave Balance: {leave_balance} days**")
 
-    # Certificate Generation
+    # Leave Request Section
+    st.subheader("📅 Apply for Leave")
+    leave_type = st.selectbox("Select Leave Type", ["Sick Leave", "Casual Leave", "Emergency Leave"])
+    start_date = st.date_input("Start Date")
+    end_date = st.date_input("End Date")
+    reason = st.text_area("Reason for Leave")
+
+    if st.button("Submit Leave Request"):
+        response = apply_leave(user_email, leave_type, str(start_date), str(end_date), reason)
+        st.success(response)
+
+    # Certificate Generation Section
     st.subheader("🎓 Generate Your Certificate")
     name = st.text_input("Enter Your Name", value=user_name)
     
