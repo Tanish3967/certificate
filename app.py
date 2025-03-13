@@ -5,7 +5,6 @@ from requests_oauthlib import OAuth2Session
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from datetime import datetime
-import webbrowser
 
 # Initialize session state variables
 if "role" not in st.session_state:
@@ -135,6 +134,7 @@ initialize_db()
 def reset_app():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    st.query_params.clear()
     st.rerun()
 
 # UI Title
@@ -145,10 +145,7 @@ if st.sidebar.button("Reset Session"):
     reset_app()
 
 # Handle authentication flow
-auth_code = st.query_params.get("code")
-
-# Check if we have an auth code in the URL
-if auth_code and not st.session_state.authenticated:
+if "code" in st.query_params and not st.session_state.authenticated:
     try:
         # Create OAuth session
         google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI)
@@ -157,7 +154,7 @@ if auth_code and not st.session_state.authenticated:
         token = google.fetch_token(
             TOKEN_URL,
             client_secret=CLIENT_SECRET,
-            code=auth_code
+            code=st.query_params["code"]
         )
         
         # Get user info
@@ -176,6 +173,7 @@ if auth_code and not st.session_state.authenticated:
     except Exception as e:
         st.error(f"OAuth Error: {e}")
         st.query_params.clear()
+        st.rerun()
 
 # Role Selection - Only show if not authenticated
 if not st.session_state.authenticated and not st.session_state.admin_logged_in:
@@ -205,11 +203,12 @@ if not st.session_state.authenticated and not st.session_state.admin_logged_in:
                 st.error("❌ Invalid admin credentials")
     
     elif st.session_state.role in ["Student", "Teacher"]:
-        # Google OAuth Login
+        # Google OAuth Login - ensure access_type=offline to prevent invalid_grant errors
         flow = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
         authorization_url, state = flow.authorization_url(
             AUTHORIZATION_BASE_URL,
             access_type="offline",
+            prompt="consent",  # Force to show the consent screen every time
             include_granted_scopes="true"
         )
         
@@ -235,26 +234,9 @@ if st.session_state.authenticated and st.session_state.user:
     st.success(f"✅ Logged in as {user_name} ({user_email})")
     st.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
     
-    # Certificate Generation
-    if st.button("Generate Certificate"):
-        pdf_buffer = BytesIO()
-        c = canvas.Canvas(pdf_buffer)
-        c.setFont("Helvetica", 30)
-        c.drawString(200, 700, "Certificate of Achievement")
-        c.setFont("Helvetica", 20)
-        c.drawString(220, 650, f"Awarded to: {user_name}")
-        c.setFont("Helvetica", 15)
-        c.drawString(220, 600, f"Role: {user_role}")
-        c.save()
-
-        pdf_buffer.seek(0)
-        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
-    
-    # Leave Application
-    if st.button("🏖 Apply for Leave"):
-        st.session_state.show_leave_form = not st.session_state.show_leave_form
-    
-    if st.session_state.show_leave_form:
+    # Show different features based on role
+    if user_role == "Teacher":
+        # For Teachers, only show leave application
         st.subheader("📅 Leave Application Form")
         
         with st.form("leave_request"):
@@ -273,6 +255,46 @@ if st.session_state.authenticated and st.session_state.user:
                 # Refresh leave balance
                 _, leave_balance = get_user_info(user_email)
                 st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
+    
+    else:  # For Students, show both certificate and leave application
+        # Certificate Generation
+        if st.button("Generate Certificate"):
+            pdf_buffer = BytesIO()
+            c = canvas.Canvas(pdf_buffer)
+            c.setFont("Helvetica", 30)
+            c.drawString(200, 700, "Certificate of Achievement")
+            c.setFont("Helvetica", 20)
+            c.drawString(220, 650, f"Awarded to: {user_name}")
+            c.setFont("Helvetica", 15)
+            c.drawString(220, 600, f"Role: {user_role}")
+            c.save()
+
+            pdf_buffer.seek(0)
+            st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
+        
+        # Leave Application
+        if st.button("🏖 Apply for Leave"):
+            st.session_state.show_leave_form = not st.session_state.show_leave_form
+        
+        if st.session_state.show_leave_form:
+            st.subheader("📅 Leave Application Form")
+            
+            with st.form("leave_request"):
+                leave_type = st.selectbox("Leave Type", ["Sick Leave", "Casual Leave", "Vacation"])
+                start_date = st.date_input("Start Date")
+                end_date = st.date_input("End Date")
+                reason = st.text_area("Reason for Leave")
+                submit_leave = st.form_submit_button("Submit Leave Request")
+            
+            if submit_leave:
+                if end_date < start_date:
+                    st.error("❌ Invalid date range")
+                else:
+                    result = request_leave(user_email, leave_type, start_date, end_date, reason)
+                    st.success(result)
+                    # Refresh leave balance
+                    _, leave_balance = get_user_info(user_email)
+                    st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
 
 elif st.session_state.admin_logged_in:
     # Admin Dashboard
