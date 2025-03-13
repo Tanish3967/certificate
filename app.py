@@ -5,6 +5,19 @@ from requests_oauthlib import OAuth2Session
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from datetime import datetime
+import webbrowser
+
+# Initialize session state variables
+if "role" not in st.session_state:
+    st.session_state.role = None
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "admin_logged_in" not in st.session_state:
+    st.session_state.admin_logged_in = False
+if "show_leave_form" not in st.session_state:
+    st.session_state.show_leave_form = False
 
 # Load Secrets from streamlit secrets.toml
 CLIENT_ID = st.secrets["oauth"]["client_id"]
@@ -122,97 +135,92 @@ initialize_db()
 def reset_app():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    # Clear query parameters
-    st.query_params.clear()
     st.rerun()
 
 # UI Title
 st.title("🎓 Role-Based Sign-In & Leave System")
 
-# Add reset button at the top
-if st.button("Reset Application"):
+# Add reset button
+if st.sidebar.button("Reset Session"):
     reset_app()
 
-# Role Selection - Only show if no authentication flow has started
-if "authentication_flow" not in st.session_state:
-    st.session_state.authentication_flow = None
+# Handle authentication flow
+auth_code = st.query_params.get("code")
 
-if "role" not in st.session_state:
-    role_options = ["Student", "Teacher", "Admin"]
-    selected_role = st.selectbox("Select your role:", role_options)
-    
-    if st.button("Continue with selected role"):
-        st.session_state.role = selected_role
+# Check if we have an auth code in the URL
+if auth_code and not st.session_state.authenticated:
+    try:
+        # Create OAuth session
+        google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI)
         
-        # Set the authentication flow based on role
-        if selected_role == "Admin":
-            st.session_state.authentication_flow = "admin_manual"
-        else:
-            st.session_state.authentication_flow = "oauth"
+        # Exchange code for token
+        token = google.fetch_token(
+            TOKEN_URL,
+            client_secret=CLIENT_SECRET,
+            code=auth_code
+        )
         
-        # Clear any query parameters
+        # Get user info
+        user_info = requests.get(
+            USER_INFO_URL,
+            headers={"Authorization": f"Bearer {token['access_token']}"}
+        ).json()
+        
+        # Store in session state
+        st.session_state.user = user_info
+        st.session_state.authenticated = True
+        
+        # Clear the URL parameters
         st.query_params.clear()
         st.rerun()
+    except Exception as e:
+        st.error(f"OAuth Error: {e}")
+        st.query_params.clear()
 
-# Handle authentication based on the selected flow
-if st.session_state.authentication_flow == "admin_manual":
-    # Admin Manual Login
-    with st.form("admin_login"):
-        st.subheader("Admin Login")
-        admin_username = st.text_input("Username")
-        admin_password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
-    
-    if submit:
-        if admin_username == "admin" and admin_password == "admin123":
-            st.session_state.admin_logged_in = True
-            st.success("✅ Admin login successful!")
+# Role Selection - Only show if not authenticated
+if not st.session_state.authenticated and not st.session_state.admin_logged_in:
+    if st.session_state.role is None:
+        role_options = ["Student", "Teacher", "Admin"]
+        selected_role = st.selectbox("Select your role:", role_options)
+        
+        if st.button("Continue"):
+            st.session_state.role = selected_role
             st.rerun()
-        else:
-            st.error("❌ Invalid admin credentials")
-
-elif st.session_state.authentication_flow == "oauth":
-    # Google OAuth for Students and Teachers
-    if "token" not in st.session_state and "code" not in st.query_params:
-        # Create OAuth session
-        google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
-        authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
+    
+    # Show appropriate login method based on role
+    if st.session_state.role == "Admin":
+        # Admin Manual Login
+        with st.form("admin_login"):
+            st.subheader("Admin Login")
+            admin_username = st.text_input("Username")
+            admin_password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Login")
         
-        # Store state
-        st.session_state.oauth_state = state
+        if submit:
+            if admin_username == "admin" and admin_password == "admin123":
+                st.session_state.admin_logged_in = True
+                st.success("✅ Admin login successful!")
+                st.rerun()
+            else:
+                st.error("❌ Invalid admin credentials")
+    
+    elif st.session_state.role in ["Student", "Teacher"]:
+        # Google OAuth Login
+        flow = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
+        authorization_url, state = flow.authorization_url(
+            AUTHORIZATION_BASE_URL,
+            access_type="offline",
+            include_granted_scopes="true"
+        )
         
-        # Display login link
         st.markdown(f"[🔑 Login with Google]({authorization_url})", unsafe_allow_html=True)
-    
-    # Handle OAuth callback
-    if "code" in st.query_params:
-        code = st.query_params["code"]
-        
-        try:
-            # Exchange code for token
-            google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI)
-            token = google.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET, code=code)
-            st.session_state.token = token
-            
-            # Get user info
-            user_info = requests.get(USER_INFO_URL, headers={"Authorization": f"Bearer {token['access_token']}"}).json()
-            st.session_state.user = user_info
-            
-            # Clear URL parameters
-            st.query_params.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"OAuth Error: {e}")
-            # Clear URL parameters on error
-            st.query_params.clear()
-            st.rerun()
 
 # Display appropriate dashboard based on authentication status
-if "user" in st.session_state:
+if st.session_state.authenticated and st.session_state.user:
     # Student/Teacher Dashboard
     user = st.session_state.user
-    user_email = user["email"]
-    user_name = user["name"]
+    user_email = user.get("email", "")
+    user_name = user.get("name", "")
     
     # Determine role based on email pattern
     role = "Student" if user_email.startswith("220") and "@kiit.ac.in" in user_email else "Teacher"
@@ -244,9 +252,9 @@ if "user" in st.session_state:
     
     # Leave Application
     if st.button("🏖 Apply for Leave"):
-        st.session_state.show_leave_form = not st.session_state.get("show_leave_form", False)
+        st.session_state.show_leave_form = not st.session_state.show_leave_form
     
-    if st.session_state.get("show_leave_form", False):
+    if st.session_state.show_leave_form:
         st.subheader("📅 Leave Application Form")
         
         with st.form("leave_request"):
@@ -266,7 +274,7 @@ if "user" in st.session_state:
                 _, leave_balance = get_user_info(user_email)
                 st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
 
-elif "admin_logged_in" in st.session_state and st.session_state.admin_logged_in:
+elif st.session_state.admin_logged_in:
     # Admin Dashboard
     st.subheader("👨‍💼 Admin Dashboard")
     
