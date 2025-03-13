@@ -7,7 +7,8 @@ from io import BytesIO
 from reportlab.pdfgen import canvas
 
 # Database Setup
-DB_FILE = "users.db"
+import os
+DB_FILE = os.path.join(os.getcwd(), "users.db")
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
