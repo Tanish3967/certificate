@@ -1,34 +1,35 @@
 import streamlit as st
 import requests
 import sqlite3
+import os
 from requests_oauthlib import OAuth2Session
 from PIL import Image
 from io import BytesIO
-from docx import Document
-import os
-import io
-from docx import Document
+from reportlab.pdfgen import canvas
 
-# Database Setup
+# Database File Path
 DB_FILE = "users.db"
 
+# Function to Initialize Database
 def init_db():
     if not os.path.exists(DB_FILE):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                role TEXT NOT NULL
-            );
-        """)
+                name TEXT,
+                email TEXT UNIQUE,
+                role TEXT
+            )
+        ''')
         conn.commit()
         conn.close()
 
-init_db()  # Ensure DB is initialized
+# Initialize Database
+init_db()
 
+# Function to Save User in DB
 def save_user(name, email, role):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -36,59 +37,41 @@ def save_user(name, email, role):
     conn.commit()
     conn.close()
 
+# Function to Get Role from Email
 def get_role(email):
-    """Determine if the email belongs to a Student or Faculty"""
+    """Check if the email belongs to a Student or Faculty"""
     if email.startswith("220") and email.endswith("@kiit.ac.in"):
         return "Student"
     elif email.endswith("@kiit.ac.in"):
         return "Faculty"
     return "Unknown"
 
-# OAuth2 Configuration (Use Streamlit Secrets)
+# Load OAuth Credentials from Streamlit Secrets
 CLIENT_ID = st.secrets["oauth"]["client_id"]
 CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
 REDIRECT_URI = st.secrets["oauth"]["redirect_uri"]
 
+# OAuth2 URLs
 AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
-# Certificate Template
-TEMPLATE_PATH = "cert.docx"
-
-def generate_certificate(name, role):
-    """Generate a certificate by replacing placeholders in the Word template."""
-    doc = Document(TEMPLATE_PATH)
-
-    # Replace placeholders
-    for paragraph in doc.paragraphs:
-        if "<<Name>>" in paragraph.text:
-            paragraph.text = paragraph.text.replace("<<Name>>", name)
-        if "<<Role>>" in paragraph.text:
-            paragraph.text = paragraph.text.replace("<<Role>>", role)
-
-    # Save to a BytesIO stream
-    output_stream = io.BytesIO()
-    doc.save(output_stream)
-    output_stream.seek(0)
-
-    return output_stream
-
 # Streamlit UI
 st.title("🎓 Google Sign-In & Certificate Generator")
 
+# Step 1: Generate Google OAuth2 Login URL
 if "token" not in st.session_state:
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
     authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
     st.session_state["oauth_state"] = state
     st.markdown(f"[🔑 Login with Google]({authorization_url})", unsafe_allow_html=True)
 
-# Handle OAuth Callback
+# Step 2: Handle OAuth Callback
 query_params = st.query_params
 if "code" in query_params:
     code = query_params["code"]
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
-
+    
     try:
         token = google.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET, code=code)
         st.session_state["token"] = token
@@ -112,7 +95,7 @@ if "user" in st.session_state:
     st.success(f"✅ Logged in as {user_name} ({user_email})")
     st.info(f"**Role: {user_role}**")
 
-    # User profile image
+    # Display User Profile Image
     image_url = user.get("picture", "")
     if image_url:
         response = requests.get(image_url)
@@ -122,7 +105,17 @@ if "user" in st.session_state:
     # Certificate Generation
     st.subheader("🎓 Generate Your Certificate")
     name = st.text_input("Enter Your Name", value=user_name)
-
+    
     if st.button("Generate Certificate"):
-        cert_doc = generate_certificate(name, user_role)
-        st.download_button("📄 Download Certificate (Word)", data=cert_doc, file_name="certificate.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        pdf_buffer = BytesIO()
+        c = canvas.Canvas(pdf_buffer)
+        c.setFont("Helvetica", 30)
+        c.drawString(200, 700, f"Certificate of Achievement")
+        c.setFont("Helvetica", 20)
+        c.drawString(220, 650, f"Awarded to: {name}")
+        c.setFont("Helvetica", 15)
+        c.drawString(220, 600, f"Role: {user_role}")
+        c.save()
+
+        pdf_buffer.seek(0)
+        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
