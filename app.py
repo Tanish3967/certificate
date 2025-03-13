@@ -1,56 +1,84 @@
 import streamlit as st
 import requests
-from oauthlib.oauth2 import WebApplicationClient
-import os
+import json
+from urllib.parse import urlencode
+from requests_oauthlib import OAuth2Session
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from io import BytesIO
 
-# Google OAuth Credentials
-GOOGLE_CLIENT_ID = "141742353498-5geiqu2biuf2s81klgau6qjsjve9fcrc.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET = "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"
-GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+# GOOGLE OAUTH CONFIG
+CLIENT_ID = "141742353498-5geiqu2biuf2s81klgau6qjsjve9fcrc.apps.googleusercontent.com"
+CLIENT_SECRET = "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"
+REDIRECT_URI = "https://certificate-generator-1.streamlit.app"
 
-client = WebApplicationClient(GOOGLE_CLIENT_ID)
+AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
-def get_google_provider_cfg():
-    return requests.get(GOOGLE_DISCOVERY_URL).json()
+SCOPE = ["openid", "email", "profile"]
 
-def generate_certificate(user_name):
-    buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=letter)
-    pdf.setFont("Helvetica", 16)
-    pdf.drawString(100, 700, f"Certificate of Participation")
-    pdf.setFont("Helvetica", 12)
-    pdf.drawString(100, 650, f"This certifies that {user_name} has successfully participated.")
-    pdf.save()
-    buffer.seek(0)
-    return buffer
+st.title("Google Sign-In & Certificate Generator")
 
-st.title("AI Certificate Generator")
+# OAuth2 Session
+oauth = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=SCOPE)
+authorization_url, state = oauth.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline", prompt="consent")
 
-if "user" not in st.session_state:
-    st.session_state.user = None
+# Show login button if user is not authenticated
+if "oauth_token" not in st.session_state:
+    st.markdown(f"[Login with Google]({authorization_url})")
 
-if st.session_state.user is None:
-    google_provider_cfg = get_google_provider_cfg()
-    authorization_endpoint = google_provider_cfg["authorization_endpoint"]
-    
-    request_uri = client.prepare_request_uri(
-        authorization_endpoint,
-        redirect_uri="https://certificate-generator-1.streamlit.app",
-        scope=["openid", "email", "profile"],
+# Capture OAuth callback
+query_params = st.experimental_get_query_params()
+if "code" in query_params:
+    code = query_params["code"][0]
+
+    # Exchange authorization code for access token
+    token = oauth.fetch_token(
+        TOKEN_URL,
+        client_secret=CLIENT_SECRET,
+        code=code
     )
-    
-    st.markdown(f"[Login with Google]({request_uri})")
-else:
-    st.success(f"Welcome, {st.session_state.user['name']}!")
 
+    # Store token in session
+    st.session_state["oauth_token"] = token
+
+# Fetch User Info
+if "oauth_token" in st.session_state:
+    oauth = OAuth2Session(CLIENT_ID, token=st.session_state["oauth_token"])
+    response = oauth.get(USER_INFO_URL)
+    user_info = response.json()
+
+    st.subheader("User Info:")
+    st.image(user_info["picture"], width=100)
+    st.write(f"**Name:** {user_info['name']}")
+    st.write(f"**Email:** {user_info['email']}")
+
+    # Function to generate certificate
+    def generate_certificate(name):
+        pdf_filename = f"{name}_certificate.pdf"
+        c = canvas.Canvas(pdf_filename, pagesize=letter)
+        c.setFont("Helvetica-Bold", 24)
+        c.drawString(100, 700, "Certificate of Completion")
+        c.setFont("Helvetica", 18)
+        c.drawString(100, 650, f"This is to certify that {name}")
+        c.drawString(100, 620, "has successfully completed the course.")
+        c.save()
+        return pdf_filename
+
+    # Generate Certificate Button
     if st.button("Generate Certificate"):
-        pdf_buffer = generate_certificate(st.session_state.user["name"])
-        st.download_button(
-            label="Download Certificate",
-            data=pdf_buffer,
-            file_name="certificate.pdf",
-            mime="application/pdf"
-        )
+        pdf_file = generate_certificate(user_info["name"])
+
+        with open(pdf_file, "rb") as file:
+            st.download_button(
+                label="Download Certificate",
+                data=file,
+                file_name=pdf_file,
+                mime="application/pdf"
+            )
+
+    # Logout button
+    if st.button("Logout"):
+        del st.session_state["oauth_token"]
+        st.rerun()
+
