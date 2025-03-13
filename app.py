@@ -6,14 +6,6 @@ from io import BytesIO
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
-# Initialize session state variables if they don't exist
-if "authentication_flow" not in st.session_state:
-    st.session_state.authentication_flow = None
-if "role" not in st.session_state:
-    st.session_state.role = None
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
-
 # Load Secrets from streamlit secrets.toml
 CLIENT_ID = st.secrets["oauth"]["client_id"]
 CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
@@ -130,7 +122,8 @@ initialize_db()
 def reset_app():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.experimental_set_query_params()
+    # Clear query parameters
+    st.query_params.clear()
     st.rerun()
 
 # UI Title
@@ -141,7 +134,10 @@ if st.button("Reset Application"):
     reset_app()
 
 # Role Selection - Only show if no authentication flow has started
-if st.session_state.authentication_flow is None:
+if "authentication_flow" not in st.session_state:
+    st.session_state.authentication_flow = None
+
+if "role" not in st.session_state:
     role_options = ["Student", "Teacher", "Admin"]
     selected_role = st.selectbox("Select your role:", role_options)
     
@@ -154,8 +150,8 @@ if st.session_state.authentication_flow is None:
         else:
             st.session_state.authentication_flow = "oauth"
         
-        # Remove any query parameters to avoid OAuth conflicts
-        st.experimental_set_query_params()
+        # Clear any query parameters
+        st.query_params.clear()
         st.rerun()
 
 # Handle authentication based on the selected flow
@@ -203,12 +199,13 @@ elif st.session_state.authentication_flow == "oauth":
             st.session_state.user = user_info
             
             # Clear URL parameters
-            st.experimental_set_query_params()
+            st.query_params.clear()
             st.rerun()
         except Exception as e:
             st.error(f"OAuth Error: {e}")
             # Clear URL parameters on error
-            st.experimental_set_query_params()
+            st.query_params.clear()
+            st.rerun()
 
 # Display appropriate dashboard based on authentication status
 if "user" in st.session_state:
@@ -269,7 +266,7 @@ if "user" in st.session_state:
                 _, leave_balance = get_user_info(user_email)
                 st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
 
-elif st.session_state.admin_logged_in:
+elif "admin_logged_in" in st.session_state and st.session_state.admin_logged_in:
     # Admin Dashboard
     st.subheader("👨‍💼 Admin Dashboard")
     
