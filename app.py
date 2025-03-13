@@ -43,9 +43,9 @@ def get_role(email):
     return "Unknown"
 
 # OAuth2 Configuration
-CLIENT_ID = "141742353498-5geiqu2biuf2s81klgau6qjsjve9fcrc.apps.googleusercontent.com"
-CLIENT_SECRET = "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"
-REDIRECT_URI = "https://certificate-generator-1.streamlit.app/"
+CLIENT_ID = st.secrets["oauth"]["client_id"]
+CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
+REDIRECT_URI = st.secrets["oauth"]["redirect_uri"]
 
 AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
