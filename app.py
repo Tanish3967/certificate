@@ -20,30 +20,30 @@ USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
 # Database Setup
 def init_db():
-    """Initialize the database and create necessary tables."""
+    """Initialize the database with the correct schema."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Create users table
+    # Recreate `users` table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            email TEXT UNIQUE,
-            role TEXT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            role TEXT NOT NULL,
             leave_balance INTEGER DEFAULT 10
         )
     ''')
 
-    # Create leave_requests table
+    # Recreate `leave_requests` table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS leave_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            leave_type TEXT,
-            start_date TEXT,
-            end_date TEXT,
-            reason TEXT,
+            user_id INTEGER NOT NULL,
+            leave_type TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            reason TEXT NOT NULL,
             status TEXT DEFAULT 'Pending',
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
@@ -52,8 +52,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Initialize the database
+# Run the function
 init_db()
+
 
 def save_user(name, email, role):
     """Save user details in the database."""
