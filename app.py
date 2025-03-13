@@ -21,6 +21,8 @@ if "show_leave_form" not in st.session_state:
     st.session_state.show_leave_form = False
 if "show_cert_form" not in st.session_state:
     st.session_state.show_cert_form = False
+if "leave_balance" not in st.session_state:
+    st.session_state.leave_balance = 0
 
 # Load Secrets from streamlit secrets.toml
 CLIENT_ID = st.secrets["oauth"]["client_id"]
@@ -129,6 +131,10 @@ def request_leave(email, leave_type, start_date, end_date, reason):
 
     conn.commit()
     conn.close()
+    
+    # Update session state with new balance
+    st.session_state.leave_balance = new_leave_balance
+    
     return f"✅ Leave request submitted! {new_leave_balance} leaves remaining."
 
 # Generate certificate based on type with IST timestamp
@@ -212,6 +218,9 @@ st.title("🎓 Role-Based Sign-In & Leave System")
 if st.sidebar.button("Reset Session"):
     reset_app()
 
+# Create a placeholder for the info bar
+info_placeholder = st.empty()
+
 # Check for OAuth code in URL
 if "code" in st.query_params and not st.session_state.authenticated:
     try:
@@ -241,7 +250,6 @@ if "code" in st.query_params and not st.session_state.authenticated:
     except Exception as e:
         st.error(f"OAuth Error: {e}")
         st.query_params.clear()
-        st.rerun()
 
 # Role Selection - Only show if not authenticated
 if not st.session_state.authenticated and not st.session_state.admin_logged_in:
@@ -297,10 +305,10 @@ if st.session_state.authenticated and st.session_state.user:
     
     # Get updated user info
     user_role, leave_balance = get_user_info(user_email)
+    st.session_state.leave_balance = leave_balance
     
-    # Display user info
-    st.success(f"✅ Logged in as {user_name} ({user_email})")
-    st.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
+    # Display user info using the placeholder
+    info_placeholder.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {st.session_state.leave_balance} days**")
     
     # Show different features based on role
     if user_role == "Teacher":
@@ -320,9 +328,8 @@ if st.session_state.authenticated and st.session_state.user:
             else:
                 result = request_leave(user_email, leave_type, start_date, end_date, reason)
                 st.success(result)
-                # Refresh leave balance
-                _, leave_balance = get_user_info(user_email)
-                st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
+                # Update the info bar with new balance
+                info_placeholder.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {st.session_state.leave_balance} days**")
     
     else:  # For Students, show both certificate and leave application
         # Certificate Generation with toggle behavior
@@ -366,9 +373,8 @@ if st.session_state.authenticated and st.session_state.user:
                 else:
                     result = request_leave(user_email, leave_type, start_date, end_date, reason)
                     st.success(result)
-                    # Refresh leave balance
-                    _, leave_balance = get_user_info(user_email)
-                    st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
+                    # Update the info bar with new balance
+                    info_placeholder.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {st.session_state.leave_balance} days**")
 
 elif st.session_state.admin_logged_in:
     # Admin Dashboard
@@ -440,12 +446,4 @@ elif st.session_state.admin_logged_in:
                     st.write(f"**Leave Balance:** {user[4]} days")
                     
                     # Leave balance adjustment
-                    new_balance = st.number_input("Adjust Leave Balance", min_value=0, value=user[4], key=f"balance_{user[0]}")
-                    
-                    if st.button("Update", key=f"update_{user[0]}"):
-                        conn = get_db_connection()
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_balance, user[0]))
-                        conn.commit()
-                        conn.close()
-                        st.success("User updated successfully!")
+                    new_balance = st.number_input("Adjust Leave Balance", min_value=0, value=user[4], key=f"balance_{
