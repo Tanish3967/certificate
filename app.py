@@ -4,8 +4,7 @@ import sqlite3
 from requests_oauthlib import OAuth2Session
 from PIL import Image
 from io import BytesIO
-from PyPDF2 import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
+from docx import Document
 import os
 
 # Database Setup
@@ -53,32 +52,20 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
 # Certificate Template
-TEMPLATE_PATH = "cert.pdf"
+TEMPLATE_PATH = "template.docx"
 
-def generate_certificate(name):
-    """Generate a certificate by overlaying name onto a PDF template"""
-    pdf_reader = PdfReader(TEMPLATE_PATH)
-    pdf_writer = PdfWriter()
+def generate_certificate(name, role):
+    """Generate a certificate from a Word template and return as a downloadable file."""
+    doc = Document(TEMPLATE_PATH)
 
-    # Create a new PDF with the name
-    packet = BytesIO()
-    can = canvas.Canvas(packet)
-    can.setFont("Helvetica-Bold", 20)
+    # Replace placeholders in the template
+    for paragraph in doc.paragraphs:
+        paragraph.text = paragraph.text.replace("<<Name>>", name)
+        paragraph.text = paragraph.text.replace("<<Role>>", role)
 
-    # Adjust position (x, y) for exact placement
-    can.drawString(250, 350, name)
-    can.save()
-
-    # Merge template and new PDF
-    packet.seek(0)
-    new_pdf = PdfReader(packet)
-    page = pdf_reader.pages[0]
-    page.merge_page(new_pdf.pages[0])
-
-    # Save the final certificate
-    pdf_writer.add_page(page)
+    # Save to a BytesIO stream
     output_stream = BytesIO()
-    pdf_writer.write(output_stream)
+    doc.save(output_stream)
     output_stream.seek(0)
 
     return output_stream
@@ -93,7 +80,7 @@ if "token" not in st.session_state:
     st.markdown(f"[🔑 Login with Google]({authorization_url})", unsafe_allow_html=True)
 
 # Handle OAuth Callback
-query_params = st.query_params  # ✅ FIXED
+query_params = st.query_params
 if "code" in query_params:
     code = query_params["code"]
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
@@ -133,5 +120,5 @@ if "user" in st.session_state:
     name = st.text_input("Enter Your Name", value=user_name)
 
     if st.button("Generate Certificate"):
-        cert_pdf = generate_certificate(name)
-        st.download_button("📄 Download Certificate", data=cert_pdf, file_name="certificate.pdf", mime="application/pdf")
+        cert_doc = generate_certificate(name, user_role)
+        st.download_button("📄 Download Certificate (Word)", data=cert_doc, file_name="certificate.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
