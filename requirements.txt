@@ -1,6 +1,6 @@
 streamlit
-reportlab
-streamlit-authenticator
+requests
 oauthlib
 requests-oauthlib
+pillow
 reportlab
