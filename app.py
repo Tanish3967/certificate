@@ -10,7 +10,7 @@ import os
 # Load Secrets for OAuth
 CLIENT_ID = st.secrets["oauth"]["client_id"]
 CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
-REDIRECT_URI = st.secrets["oauth"]["redirect_uri"]
+REDIRECT_URI = st.secrets["oauth"]["redirect_url"]
 
 AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
