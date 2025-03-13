@@ -6,7 +6,7 @@ from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, A4, landscape
 from datetime import datetime
-import os
+import pytz
 
 # Initialize session state variables
 if "role" not in st.session_state:
@@ -19,6 +19,8 @@ if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
 if "show_leave_form" not in st.session_state:
     st.session_state.show_leave_form = False
+if "show_cert_form" not in st.session_state:
+    st.session_state.show_cert_form = False
 
 # Load Secrets from streamlit secrets.toml
 CLIENT_ID = st.secrets["oauth"]["client_id"]
@@ -129,10 +131,15 @@ def request_leave(email, leave_type, start_date, end_date, reason):
     conn.close()
     return f"✅ Leave request submitted! {new_leave_balance} leaves remaining."
 
-# Generate certificate based on type
+# Generate certificate based on type with IST timestamp
 def generate_certificate(user_name, user_role, cert_type):
     pdf_buffer = BytesIO()
     c = canvas.Canvas(pdf_buffer, pagesize=landscape(A4))
+    
+    # Get current IST timestamp
+    ist_timezone = pytz.timezone('Asia/Kolkata')
+    current_time = datetime.now(ist_timezone)
+    formatted_date = current_time.strftime("%B %d, %Y, %I:%M %p IST")
     
     # Set up the certificate based on type
     if cert_type == "NOC":
@@ -178,10 +185,9 @@ def generate_certificate(user_name, user_role, cert_type):
         c.setFont("Helvetica", 18)
         c.drawCentredString(420, 290, f"Role: {user_role}")
     
-    # Add date and signature
+    # Add date and signature with IST timestamp
     c.setFont("Helvetica", 12)
-    current_date = datetime.now().strftime("%B %d, %Y")
-    c.drawCentredString(420, 200, f"Date: {current_date}")
+    c.drawCentredString(420, 200, f"Date: {formatted_date}")
     c.drawCentredString(420, 150, "____________________")
     c.drawCentredString(420, 130, "Principal's Signature")
     
@@ -319,22 +325,26 @@ if st.session_state.authenticated and st.session_state.user:
                 st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
     
     else:  # For Students, show both certificate and leave application
-        # Certificate Generation with multiple types
-        st.subheader("📄 Certificate Generation")
-        
-        cert_type = st.selectbox(
-            "Select Certificate Type:", 
-            ["Achievement Certificate", "NOC", "Bonafide", "Leaving"]
-        )
-        
+        # Certificate Generation with toggle behavior
         if st.button("Generate Certificate"):
-            pdf_buffer = generate_certificate(user_name, user_role, cert_type)
-            st.download_button(
-                label="📄 Download Certificate", 
-                data=pdf_buffer, 
-                file_name=f"{cert_type.lower().replace(' ', '_')}_certificate.pdf", 
-                mime="application/pdf"
+            st.session_state.show_cert_form = not st.session_state.show_cert_form
+        
+        if st.session_state.show_cert_form:
+            st.subheader("📄 Certificate Generation")
+            
+            cert_type = st.selectbox(
+                "Select Certificate Type:", 
+                ["Achievement Certificate", "NOC", "Bonafide", "Leaving"]
             )
+            
+            if st.button("Download Certificate"):
+                pdf_buffer = generate_certificate(user_name, user_role, cert_type)
+                st.download_button(
+                    label="📄 Download Certificate", 
+                    data=pdf_buffer, 
+                    file_name=f"{cert_type.lower().replace(' ', '_')}_certificate.pdf", 
+                    mime="application/pdf"
+                )
         
         # Leave Application
         if st.button("🏖 Apply for Leave"):
@@ -439,6 +449,3 @@ elif st.session_state.admin_logged_in:
                         conn.commit()
                         conn.close()
                         st.success("User updated successfully!")
-                        st.rerun()
-        else:
-            st.info("No users found.")
