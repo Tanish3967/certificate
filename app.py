@@ -50,35 +50,37 @@ def get_user_info(email):
 
 # Apply for leave
 def request_leave(email, leave_type, start_date, end_date, reason, leave_days):
-    conn = get_db_connection()
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
     # Check current leave balance
     cursor.execute("SELECT total_leaves FROM users WHERE email = ?", (email,))
-    user = cursor.fetchone()
-    
-    if not user:
-        return "❌ User not found."
-    
-    total_leaves = user[0]
+    result = cursor.fetchone()
 
-    if leave_days > total_leaves:
-        return "❌ Not enough leave balance!"
+    if result is None:
+        conn.close()
+        return "⚠️ User not found!"
 
-    # Deduct leave balance
-    new_balance = total_leaves - leave_days
-    cursor.execute("UPDATE users SET total_leaves = ? WHERE email = ?", (new_balance, email))
-    
+    available_leaves = result[0]
+
+    if available_leaves < leave_days:
+        conn.close()
+        return f"❌ Not enough leaves! Only {available_leaves} left."
+
+    # Deduct leaves
+    new_leave_balance = available_leaves - leave_days
+    cursor.execute("UPDATE users SET total_leaves = ? WHERE email = ?", (new_leave_balance, email))
+
     # Insert leave request
     cursor.execute(
-        "INSERT INTO leave_requests (email, leave_type, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (email, leave_type, start_date, end_date, reason, "Pending")
+        "INSERT INTO leave_requests (email, leave_type, start_date, end_date, reason, days, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (email, leave_type, start_date, end_date, reason, leave_days, "Pending"),
     )
-    
+
     conn.commit()
     conn.close()
-    
-    return f"✅ Leave request submitted! Remaining leave balance: {new_balance} days"
+    return f"✅ Leave request submitted! {new_leave_balance} leaves remaining."
+
 
 # Google OAuth login
 st.title("🎓 Google Sign-In, Certificate & Leave System")
