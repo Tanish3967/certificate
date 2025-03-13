@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import requests
 from requests_oauthlib import OAuth2Session
-from PIL import Image
 from io import BytesIO
 from reportlab.pdfgen import canvas
 
@@ -22,50 +21,91 @@ DB_FILE = "users.db"
 def get_db_connection():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
-# Auto-assign role based on email
-def determine_role(email):
+# Ensure users table exists
+def initialize_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            email TEXT UNIQUE,
+            role TEXT,
+            leave_balance INTEGER DEFAULT 10,
+            total_leaves INTEGER DEFAULT 0
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leave_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            leave_type TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            status TEXT DEFAULT 'Pending',
+            email TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# Assign role based on email
+def assign_role(email):
     if email.startswith("220") and email.endswith("@kiit.ac.in"):
         return "Student"
-    else:
-        return "Faculty"
+    return "Teacher"
 
 # Save user to database
 def save_user(name, email):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Check if user exists
-    cursor.execute("SELECT role, leave_balance FROM users WHERE email = ?", (email,))
-    user = cursor.fetchone()
+    role = assign_role(email)
+    
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (name, email, role, leave_balance) VALUES (?, ?, ?, ?)",
+        (name, email, role, 20 if role == "Student" else 30)
+    )
 
-    if not user:
-        role = determine_role(email)
-        leave_balance = 20 if role == "Student" else 30
-        cursor.execute(
-            "INSERT INTO users (name, email, role, leave_balance) VALUES (?, ?, ?, ?)",
-            (name, email, role, leave_balance)
-        )
-        conn.commit()
+    conn.commit()
     conn.close()
 
-# Get user role and leave balance
+# Get user info (role & leave balance)
 def get_user_info(email):
     conn = get_db_connection()
     cursor = conn.cursor()
+    
     cursor.execute("SELECT role, leave_balance FROM users WHERE email = ?", (email,))
     user = cursor.fetchone()
     conn.close()
+    
     return user if user else ("Unknown", 0)
+
+# Update leave balance dynamically
+def get_updated_leave_balance(email):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT leave_balance FROM users WHERE email = ?", (email,))
+    balance = cursor.fetchone()
+    
+    conn.close()
+    return balance[0] if balance else 0
 
 # Apply for leave
 def request_leave(email, leave_type, start_date, end_date, reason, leave_days):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Get user_id and leave balance
+    # Check current leave balance
     cursor.execute("SELECT id, leave_balance FROM users WHERE email = ?", (email,))
     user = cursor.fetchone()
-    
+
     if not user:
         conn.close()
         return "⚠️ User not found!"
@@ -76,25 +116,24 @@ def request_leave(email, leave_type, start_date, end_date, reason, leave_days):
         conn.close()
         return f"❌ Not enough leaves! Only {available_leaves} left."
 
-    # Deduct leave days
+    # Deduct leaves
     new_leave_balance = available_leaves - leave_days
-    cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_leave_balance, user_id))
+    cursor.execute("UPDATE users SET leave_balance = ? WHERE email = ?", (new_leave_balance, email))
 
-    # Insert leave request using user_id and email
+    # Insert leave request
     cursor.execute(
-        "INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, reason, status, email) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user_id, leave_type, start_date, end_date, reason, "Pending", email),
+        "INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, reason, email) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, leave_type, start_date, end_date, reason, email),
     )
 
     conn.commit()
     conn.close()
-    return f"✅ Leave request submitted! {new_leave_balance} days remaining."
+    return f"✅ Leave request submitted! {new_leave_balance} leaves remaining."
 
 
-# Streamlit UI
+# Google OAuth login
 st.title("🎓 Google Sign-In, Certificate & Leave System")
 
-# Google OAuth Login
 if "token" not in st.session_state:
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
     authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
@@ -119,19 +158,27 @@ if "user" in st.session_state:
     user = st.session_state["user"]
     user_email = user["email"]
     user_name = user["name"]
-
-    save_user(user_name, user_email)  # Save user if not exists
+    
+    save_user(user_name, user_email)
+    
     role, leave_balance = get_user_info(user_email)
 
-    # Update session for role & leave balance
-    st.session_state["role"] = role
-    st.session_state["leave_balance"] = leave_balance
+    # Placeholder for leave balance
+    leave_status_placeholder = st.empty()
+    
+    def update_leave_status():
+        leave_status_placeholder.markdown(
+            f"""
+            <div style="background-color:#1e3a5f;padding:10px;border-radius:5px;color:white;">
+            <strong>Role:</strong> {role} | 🏖️ <strong>Remaining Leave Balance:</strong> {leave_balance} days
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
-    # Display user info
-    st.success(f"✅ Logged in as {user_name} ({user_email})")
-    st.info(f"**Role: {role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
+    # Initial status display
+    update_leave_status()
 
-    # Generate Certificate
     if st.button("Generate Certificate"):
         pdf_buffer = BytesIO()
         c = canvas.Canvas(pdf_buffer)
@@ -142,7 +189,7 @@ if "user" in st.session_state:
         c.setFont("Helvetica", 15)
         c.drawString(220, 600, f"Role: {role}")
         c.save()
-
+        
         pdf_buffer.seek(0)
         st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
 
@@ -162,9 +209,7 @@ if "user" in st.session_state:
             message = request_leave(user_email, leave_type, start_date, end_date, reason, leave_days)
             st.success(message)
 
-            # **🔄 Fix UI Update: Refresh Leave Balance After Submission**
-            role, updated_leave_balance = get_user_info(user_email)
-            st.session_state["leave_balance"] = updated_leave_balance
-
-    # **🔵 Display Updated Leave Balance in Blue Banner**
-    st.info(f"🔹 **Updated Leave Balance: {st.session_state.get('leave_balance', leave_balance)} days**")
+            # Update the leave balance dynamically after submission
+            updated_balance = get_updated_leave_balance(user_email)
+            leave_balance = updated_balance  # Update balance for next request
+            update_leave_status()
