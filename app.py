@@ -6,6 +6,14 @@ from io import BytesIO
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
+# Initialize session state variables if they don't exist
+if "authentication_flow" not in st.session_state:
+    st.session_state.authentication_flow = None
+if "role" not in st.session_state:
+    st.session_state.role = None
+if "admin_logged_in" not in st.session_state:
+    st.session_state.admin_logged_in = False
+
 # Load Secrets from streamlit secrets.toml
 CLIENT_ID = st.secrets["oauth"]["client_id"]
 CLIENT_SECRET = st.secrets["oauth"]["client_secret"]
@@ -118,188 +126,228 @@ def request_leave(email, leave_type, start_date, end_date, reason):
 # Initialize database
 initialize_db()
 
+# Reset function
+def reset_app():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.experimental_set_query_params()
+    st.rerun()
+
 # UI Title
 st.title("🎓 Role-Based Sign-In & Leave System")
 
-# Role Selection
-if "role" not in st.session_state:
-    role = st.selectbox("Select your role:", ["Student", "Teacher", "Admin"])
-    st.session_state["role"] = role
+# Add reset button at the top
+if st.button("Reset Application"):
+    reset_app()
 
-# Separate authentication flows based on role
-if st.session_state["role"] == "Admin":
-    # Admin Manual Login - completely separate from OAuth flow
-    with st.form(key="admin_login_form"):
-        admin_username = st.text_input("Admin Username")
-        admin_password = st.text_input("Admin Password", type="password")
-        submit_button = st.form_submit_button("Login as Admin")
+# Role Selection - Only show if no authentication flow has started
+if st.session_state.authentication_flow is None:
+    role_options = ["Student", "Teacher", "Admin"]
+    selected_role = st.selectbox("Select your role:", role_options)
     
-    if submit_button:
-        if admin_username == "admin" and admin_password == "admin123":
-            st.session_state["admin_logged_in"] = True
-            st.success("✅ Logged in as Admin!")
+    if st.button("Continue with selected role"):
+        st.session_state.role = selected_role
+        
+        # Set the authentication flow based on role
+        if selected_role == "Admin":
+            st.session_state.authentication_flow = "admin_manual"
         else:
-            st.error("❌ Incorrect admin credentials!")
+            st.session_state.authentication_flow = "oauth"
+        
+        # Remove any query parameters to avoid OAuth conflicts
+        st.experimental_set_query_params()
+        st.rerun()
 
-# Google OAuth login ONLY for Students & Teachers
-elif st.session_state["role"] in ["Student", "Teacher"]:
-    if "token" not in st.session_state:
+# Handle authentication based on the selected flow
+if st.session_state.authentication_flow == "admin_manual":
+    # Admin Manual Login
+    with st.form("admin_login"):
+        st.subheader("Admin Login")
+        admin_username = st.text_input("Username")
+        admin_password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+    
+    if submit:
+        if admin_username == "admin" and admin_password == "admin123":
+            st.session_state.admin_logged_in = True
+            st.success("✅ Admin login successful!")
+            st.rerun()
+        else:
+            st.error("❌ Invalid admin credentials")
+
+elif st.session_state.authentication_flow == "oauth":
+    # Google OAuth for Students and Teachers
+    if "token" not in st.session_state and "code" not in st.query_params:
+        # Create OAuth session
         google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
         authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
-        st.session_state["oauth_state"] = state
+        
+        # Store state
+        st.session_state.oauth_state = state
+        
+        # Display login link
         st.markdown(f"[🔑 Login with Google]({authorization_url})", unsafe_allow_html=True)
-
+    
+    # Handle OAuth callback
     if "code" in st.query_params:
         code = st.query_params["code"]
-        google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
-
+        
         try:
+            # Exchange code for token
+            google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI)
             token = google.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET, code=code)
-            st.session_state["token"] = token
-
+            st.session_state.token = token
+            
+            # Get user info
             user_info = requests.get(USER_INFO_URL, headers={"Authorization": f"Bearer {token['access_token']}"}).json()
-            st.session_state["user"] = user_info
+            st.session_state.user = user_info
+            
+            # Clear URL parameters
+            st.experimental_set_query_params()
+            st.rerun()
         except Exception as e:
             st.error(f"OAuth Error: {e}")
+            # Clear URL parameters on error
+            st.experimental_set_query_params()
 
-# Display User Info or Admin Dashboard
-if "user" in st.session_state or "admin_logged_in" in st.session_state:
+# Display appropriate dashboard based on authentication status
+if "user" in st.session_state:
+    # Student/Teacher Dashboard
+    user = st.session_state.user
+    user_email = user["email"]
+    user_name = user["name"]
     
-    # For Students and Teachers Logged In via Google OAuth
-    if "user" in st.session_state:
-        user_email = st.session_state["user"]["email"]
-        user_name = st.session_state["user"]["name"]
-        
-        # Assign role dynamically based on email pattern
-        role_assigned = "Student" if user_email.startswith("220") and "@kiit.ac.in" in user_email else "Teacher"
-        
-        save_user(user_name, user_email, role_assigned)
-        
-        user_role, leave_balance = get_user_info(user_email)
-        
-        # Display User Info
-        st.success(f"✅ Logged in as {user_name} ({user_email})")
-        st.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
-        
-        # Certificate Generation Option
-        if st.button("Generate Certificate"):
-            pdf_buffer = BytesIO()
-            c = canvas.Canvas(pdf_buffer)
-            c.setFont("Helvetica", 30)
-            c.drawString(200, 700, "Certificate of Achievement")
-            c.setFont("Helvetica", 20)
-            c.drawString(220, 650, f"Awarded to: {user_name}")
-            c.setFont("Helvetica", 15)
-            c.drawString(220, 600, f"Role: {user_role}")
-            c.save()
-
-            pdf_buffer.seek(0)
-            st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
-
-        # Leave Application Form Toggle
-        if "show_leave_form" not in st.session_state:
-            st.session_state["show_leave_form"] = False
-
-        if st.button("🏖 Apply for Leave"):
-            st.session_state["show_leave_form"] = not st.session_state["show_leave_form"]
-
-        if st.session_state["show_leave_form"]:
-            st.subheader("📅 Leave Application Form")
-            
-            with st.form(key="leave_request_form"):
-                leave_type = st.selectbox("Leave Type", ["Sick Leave", "Casual Leave", "Vacation"])
-                start_date = st.date_input("Start Date")
-                end_date = st.date_input("End Date")
-                reason = st.text_area("Reason for Leave")
-                
-                submit_leave = st.form_submit_button("Submit Leave Request")
-            
-            if submit_leave:
-                if end_date < start_date:
-                    st.error("❌ Invalid leave dates.")
-                else:
-                    message = request_leave(user_email, leave_type, start_date, end_date, reason)
-                    st.success(message)
+    # Determine role based on email pattern
+    role = "Student" if user_email.startswith("220") and "@kiit.ac.in" in user_email else "Teacher"
     
-    # For Admin Logged In
-    elif "admin_logged_in" in st.session_state:
-        st.subheader("👨‍💼 Admin Dashboard")
+    # Save user to database
+    save_user(user_name, user_email, role)
+    
+    # Get updated user info
+    user_role, leave_balance = get_user_info(user_email)
+    
+    # Display user info
+    st.success(f"✅ Logged in as {user_name} ({user_email})")
+    st.info(f"**Role: {user_role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
+    
+    # Certificate Generation
+    if st.button("Generate Certificate"):
+        pdf_buffer = BytesIO()
+        c = canvas.Canvas(pdf_buffer)
+        c.setFont("Helvetica", 30)
+        c.drawString(200, 700, "Certificate of Achievement")
+        c.setFont("Helvetica", 20)
+        c.drawString(220, 650, f"Awarded to: {user_name}")
+        c.setFont("Helvetica", 15)
+        c.drawString(220, 600, f"Role: {user_role}")
+        c.save()
+
+        pdf_buffer.seek(0)
+        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
+    
+    # Leave Application
+    if st.button("🏖 Apply for Leave"):
+        st.session_state.show_leave_form = not st.session_state.get("show_leave_form", False)
+    
+    if st.session_state.get("show_leave_form", False):
+        st.subheader("📅 Leave Application Form")
         
-        # Display tabs for different admin functions
-        tab1, tab2 = st.tabs(["📋 Leave Requests", "👥 User Management"])
+        with st.form("leave_request"):
+            leave_type = st.selectbox("Leave Type", ["Sick Leave", "Casual Leave", "Vacation"])
+            start_date = st.date_input("Start Date")
+            end_date = st.date_input("End Date")
+            reason = st.text_area("Reason for Leave")
+            submit_leave = st.form_submit_button("Submit Leave Request")
         
-        with tab1:
-            st.write("### Pending Leave Requests")
-            
-            # Fetch and display leave requests
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT lr.id, u.name, lr.email, lr.leave_type, lr.start_date, lr.end_date, lr.reason, lr.status
-                FROM leave_requests lr
-                JOIN users u ON lr.user_id = u.id
-                ORDER BY lr.id DESC
-            """)
-            requests = cursor.fetchall()
-            conn.close()
-            
-            if requests:
-                for req in requests:
-                    with st.expander(f"Request #{req[0]} - {req[1]} ({req[2]})"):
-                        st.write(f"**Type:** {req[3]}")
-                        st.write(f"**Period:** {req[4]} to {req[5]}")
-                        st.write(f"**Reason:** {req[6]}")
-                        st.write(f"**Status:** {req[7]}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✅ Approve", key=f"approve_{req[0]}"):
-                                conn = get_db_connection()
-                                cursor = conn.cursor()
-                                cursor.execute("UPDATE leave_requests SET status = 'Approved' WHERE id = ?", (req[0],))
-                                conn.commit()
-                                conn.close()
-                                st.success("Request approved!")
-                                st.rerun()
-                        
-                        with col2:
-                            if st.button("❌ Reject", key=f"reject_{req[0]}"):
-                                conn = get_db_connection()
-                                cursor = conn.cursor()
-                                cursor.execute("UPDATE leave_requests SET status = 'Rejected' WHERE id = ?", (req[0],))
-                                conn.commit()
-                                conn.close()
-                                st.success("Request rejected!")
-                                st.rerun()
+        if submit_leave:
+            if end_date < start_date:
+                st.error("❌ Invalid date range")
             else:
-                st.info("No leave requests found.")
+                result = request_leave(user_email, leave_type, start_date, end_date, reason)
+                st.success(result)
+                # Refresh leave balance
+                _, leave_balance = get_user_info(user_email)
+                st.info(f"🏖 **Updated Leave Balance: {leave_balance} days**")
+
+elif st.session_state.admin_logged_in:
+    # Admin Dashboard
+    st.subheader("👨‍💼 Admin Dashboard")
+    
+    # Create tabs for different admin functions
+    tab1, tab2 = st.tabs(["📋 Leave Requests", "👥 User Management"])
+    
+    with tab1:
+        st.write("### Pending Leave Requests")
         
-        with tab2:
-            st.write("### User Management")
-            
-            # Fetch and display users
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, name, email, role, leave_balance FROM users ORDER BY id")
-            users = cursor.fetchall()
-            conn.close()
-            
-            if users:
-                for user in users:
-                    with st.expander(f"{user[1]} ({user[2]})"):
-                        st.write(f"**Role:** {user[3]}")
-                        st.write(f"**Leave Balance:** {user[4]} days")
-                        
-                        # Add leave balance adjustment
-                        new_balance = st.number_input("Adjust Leave Balance", min_value=0, value=user[4], key=f"balance_{user[0]}")
-                        
-                        if st.button("Update", key=f"update_{user[0]}"):
+        # Fetch leave requests
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT lr.id, u.name, lr.email, lr.leave_type, lr.start_date, lr.end_date, lr.reason, lr.status
+            FROM leave_requests lr
+            JOIN users u ON lr.user_id = u.id
+            ORDER BY lr.id DESC
+        """)
+        requests = cursor.fetchall()
+        conn.close()
+        
+        if requests:
+            for req in requests:
+                with st.expander(f"Request #{req[0]} - {req[1]} ({req[2]})"):
+                    st.write(f"**Type:** {req[3]}")
+                    st.write(f"**Period:** {req[4]} to {req[5]}")
+                    st.write(f"**Reason:** {req[6]}")
+                    st.write(f"**Status:** {req[7]}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Approve", key=f"approve_{req[0]}"):
                             conn = get_db_connection()
                             cursor = conn.cursor()
-                            cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_balance, user[0]))
+                            cursor.execute("UPDATE leave_requests SET status = 'Approved' WHERE id = ?", (req[0],))
                             conn.commit()
                             conn.close()
-                            st.success("User updated successfully!")
+                            st.success("Request approved!")
                             st.rerun()
-            else:
-                st.info("No users found.")
+                    
+                    with col2:
+                        if st.button("❌ Reject", key=f"reject_{req[0]}"):
+                            conn = get_db_connection()
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE leave_requests SET status = 'Rejected' WHERE id = ?", (req[0],))
+                            conn.commit()
+                            conn.close()
+                            st.success("Request rejected!")
+                            st.rerun()
+        else:
+            st.info("No leave requests found.")
+    
+    with tab2:
+        st.write("### User Management")
+        
+        # Fetch users
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, email, role, leave_balance FROM users ORDER BY id")
+        users = cursor.fetchall()
+        conn.close()
+        
+        if users:
+            for user in users:
+                with st.expander(f"{user[1]} ({user[2]})"):
+                    st.write(f"**Role:** {user[3]}")
+                    st.write(f"**Leave Balance:** {user[4]} days")
+                    
+                    # Leave balance adjustment
+                    new_balance = st.number_input("Adjust Leave Balance", min_value=0, value=user[4], key=f"balance_{user[0]}")
+                    
+                    if st.button("Update", key=f"update_{user[0]}"):
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_balance, user[0]))
+                        conn.commit()
+                        conn.close()
+                        st.success("User updated successfully!")
+                        st.rerun()
+        else:
+            st.info("No users found.")
