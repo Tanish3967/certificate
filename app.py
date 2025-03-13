@@ -62,33 +62,34 @@ def request_leave(email, leave_type, start_date, end_date, reason, leave_days):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Check leave balance
-    cursor.execute("SELECT leave_balance FROM users WHERE email = ?", (email,))
-    result = cursor.fetchone()
+    # Get user_id and leave balance
+    cursor.execute("SELECT id, leave_balance FROM users WHERE email = ?", (email,))
+    user = cursor.fetchone()
     
-    if not result:
+    if not user:
         conn.close()
         return "⚠️ User not found!"
 
-    available_leaves = result[0]
-    
+    user_id, available_leaves = user
+
     if available_leaves < leave_days:
         conn.close()
         return f"❌ Not enough leaves! Only {available_leaves} left."
 
     # Deduct leave days
     new_leave_balance = available_leaves - leave_days
-    cursor.execute("UPDATE users SET leave_balance = ? WHERE email = ?", (new_leave_balance, email))
+    cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_leave_balance, user_id))
 
-    # Insert leave request
+    # Insert leave request using user_id and email
     cursor.execute(
-        "INSERT INTO leave_requests (email, leave_type, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (email, leave_type, start_date, end_date, reason, "Pending"),
+        "INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, reason, status, email) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, leave_type, start_date, end_date, reason, "Pending", email),
     )
 
     conn.commit()
     conn.close()
     return f"✅ Leave request submitted! {new_leave_balance} days remaining."
+
 
 # Streamlit UI
 st.title("🎓 Google Sign-In, Certificate & Leave System")
