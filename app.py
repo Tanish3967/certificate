@@ -6,6 +6,8 @@ from PIL import Image
 from io import BytesIO
 from docx import Document
 import os
+import io
+from docx import Document
 
 # Database Setup
 DB_FILE = "users.db"
@@ -55,16 +57,18 @@ USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 TEMPLATE_PATH = "cert.docx"
 
 def generate_certificate(name, role):
-    """Generate a certificate from a Word template and return as a downloadable file."""
+    """Generate a certificate by replacing placeholders in the Word template."""
     doc = Document(TEMPLATE_PATH)
 
-    # Replace placeholders in the template
+    # Replace placeholders
     for paragraph in doc.paragraphs:
-        paragraph.text = paragraph.text.replace("<<Name>>", name)
-        paragraph.text = paragraph.text.replace("<<Role>>", role)
+        if "<<Name>>" in paragraph.text:
+            paragraph.text = paragraph.text.replace("<<Name>>", name)
+        if "<<Role>>" in paragraph.text:
+            paragraph.text = paragraph.text.replace("<<Role>>", role)
 
     # Save to a BytesIO stream
-    output_stream = BytesIO()
+    output_stream = io.BytesIO()
     doc.save(output_stream)
     output_stream.seek(0)
 
