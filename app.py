@@ -1,84 +1,69 @@
 import streamlit as st
 import requests
-import json
-from urllib.parse import urlencode
 from requests_oauthlib import OAuth2Session
-from reportlab.lib.pagesizes import letter
+from PIL import Image
+from io import BytesIO
 from reportlab.pdfgen import canvas
 
-# GOOGLE OAUTH CONFIG
+# Google OAuth2 Config
 CLIENT_ID = "141742353498-5geiqu2biuf2s81klgau6qjsjve9fcrc.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
-REDIRECT_URI = "https://certificate-generator-1.streamlit.app"
-
+REDIRECT_URI = "https://certificate-generator-1.streamlit.app/"
 AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
-SCOPE = ["openid", "email", "profile"]
+# Streamlit UI
+st.title("🎓 Google Sign-In & Certificate Generator")
 
-st.title("Google Sign-In & Certificate Generator")
+# Step 1: Generate Google OAuth2 Login URL
+if "token" not in st.session_state:
+    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=[
+        "openid", "email", "profile"
+    ])
+    authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
+    st.session_state["oauth_state"] = state
+    st.markdown(f"[Login with Google]({authorization_url})", unsafe_allow_html=True)
 
-# OAuth2 Session
-oauth = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=SCOPE)
-authorization_url, state = oauth.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline", prompt="consent")
+# Step 2: Handle OAuth Callback
+if "code" in st.query_params:
+    code = st.query_params["code"]
+    google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, state=st.session_state["oauth_state"])
+    
+    try:
+        token = google.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET, code=code)
+        st.session_state["token"] = token
 
-# Show login button if user is not authenticated
-if "oauth_token" not in st.session_state:
-    st.markdown(f"[Login with Google]({authorization_url})")
+        # Fetch user info
+        user_info = requests.get(USER_INFO_URL, headers={"Authorization": f"Bearer {token['access_token']}"}).json()
+        st.session_state["user"] = user_info
+    except Exception as e:
+        st.error(f"OAuth Error: {e}")
 
-# Capture OAuth callback
-query_params = st.query_params
-if "code" in query_params:
-    code = query_params["code"][0]
+# Step 3: Display User Info & Generate Certificate
+if "user" in st.session_state:
+    user = st.session_state["user"]
+    st.success(f"✅ Logged in as {user['name']} ({user['email']})")
+    
+    # User profile image
+    image_url = user.get("picture", "")
+    if image_url:
+        response = requests.get(image_url)
+        img = Image.open(BytesIO(response.content))
+        st.image(img, width=100, caption="Google Profile Picture")
 
-    # Exchange authorization code for access token
-    token = oauth.fetch_token(
-        TOKEN_URL,
-        client_secret=CLIENT_SECRET,
-        code=code
-    )
-
-    # Store token in session
-    st.session_state["oauth_token"] = token
-
-# Fetch User Info
-if "oauth_token" in st.session_state:
-    oauth = OAuth2Session(CLIENT_ID, token=st.session_state["oauth_token"])
-    response = oauth.get(USER_INFO_URL)
-    user_info = response.json()
-
-    st.subheader("User Info:")
-    st.image(user_info["picture"], width=100)
-    st.write(f"**Name:** {user_info['name']}")
-    st.write(f"**Email:** {user_info['email']}")
-
-    # Function to generate certificate
-    def generate_certificate(name):
-        pdf_filename = f"{name}_certificate.pdf"
-        c = canvas.Canvas(pdf_filename, pagesize=letter)
-        c.setFont("Helvetica-Bold", 24)
-        c.drawString(100, 700, "Certificate of Completion")
-        c.setFont("Helvetica", 18)
-        c.drawString(100, 650, f"This is to certify that {name}")
-        c.drawString(100, 620, "has successfully completed the course.")
-        c.save()
-        return pdf_filename
-
-    # Generate Certificate Button
+    # Certificate Generation
+    st.subheader("🎓 Generate Your Certificate")
+    name = st.text_input("Enter Your Name", value=user["name"])
+    
     if st.button("Generate Certificate"):
-        pdf_file = generate_certificate(user_info["name"])
+        pdf_buffer = BytesIO()
+        c = canvas.Canvas(pdf_buffer)
+        c.setFont("Helvetica", 30)
+        c.drawString(200, 700, f"Certificate of Achievement")
+        c.setFont("Helvetica", 20)
+        c.drawString(220, 650, f"Awarded to: {name}")
+        c.save()
 
-        with open(pdf_file, "rb") as file:
-            st.download_button(
-                label="Download Certificate",
-                data=file,
-                file_name=pdf_file,
-                mime="application/pdf"
-            )
-
-    # Logout button
-    if st.button("Logout"):
-        del st.session_state["oauth_token"]
-        st.rerun()
-
+        pdf_buffer.seek(0)
+        st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
