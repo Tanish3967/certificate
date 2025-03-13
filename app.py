@@ -52,7 +52,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 USER_INFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
 
 # Certificate Template
-TEMPLATE_PATH = "template.docx"
+TEMPLATE_PATH = "cert.docx"
 
 def generate_certificate(name, role):
     """Generate a certificate from a Word template and return as a downloadable file."""
