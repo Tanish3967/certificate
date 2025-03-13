@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import requests
 from requests_oauthlib import OAuth2Session
+from PIL import Image
 from io import BytesIO
 from reportlab.pdfgen import canvas
 
@@ -19,72 +20,80 @@ DB_FILE = "users.db"
 
 # Connect to database
 def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("PRAGMA foreign_keys = ON;")  # Ensure foreign keys are enabled
-    return conn
+    return sqlite3.connect(DB_FILE, check_same_thread=False)
+
+# Auto-assign role based on email
+def determine_role(email):
+    if email.startswith("220") and email.endswith("@kiit.ac.in"):
+        return "Student"
+    else:
+        return "Faculty"
 
 # Save user to database
-def save_user(name, email, role):
+def save_user(name, email):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Assign default leave balance if user doesn't exist
-    leave_balance = 20 if role == "Student" else 30
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (name, email, role, leave_balance, total_leaves) VALUES (?, ?, ?, ?, ?)",
-        (name, email, role, leave_balance, 0)
-    )
-    
-    conn.commit()
+
+    # Check if user exists
+    cursor.execute("SELECT role, leave_balance FROM users WHERE email = ?", (email,))
+    user = cursor.fetchone()
+
+    if not user:
+        role = determine_role(email)
+        leave_balance = 20 if role == "Student" else 30
+        cursor.execute(
+            "INSERT INTO users (name, email, role, leave_balance) VALUES (?, ?, ?, ?)",
+            (name, email, role, leave_balance)
+        )
+        conn.commit()
     conn.close()
 
 # Get user role and leave balance
 def get_user_info(email):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT id, role, leave_balance FROM users WHERE email = ?", (email,))
+    cursor.execute("SELECT role, leave_balance FROM users WHERE email = ?", (email,))
     user = cursor.fetchone()
     conn.close()
-    
-    return user if user else (None, "Unknown", 0)
+    return user if user else ("Unknown", 0)
 
 # Apply for leave
 def request_leave(email, leave_type, start_date, end_date, reason, leave_days):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Get user ID and leave balance
-    cursor.execute("SELECT id, leave_balance FROM users WHERE email = ?", (email,))
+    # Check leave balance
+    cursor.execute("SELECT leave_balance FROM users WHERE email = ?", (email,))
     result = cursor.fetchone()
-
-    if result is None:
+    
+    if not result:
         conn.close()
         return "⚠️ User not found!"
 
-    user_id, available_leaves = result
-
+    available_leaves = result[0]
+    
     if available_leaves < leave_days:
         conn.close()
-        return f"❌ Not enough leave balance! Only {available_leaves} days left."
+        return f"❌ Not enough leaves! Only {available_leaves} left."
 
-    # Deduct leave balance
+    # Deduct leave days
     new_leave_balance = available_leaves - leave_days
-    cursor.execute("UPDATE users SET leave_balance = ? WHERE id = ?", (new_leave_balance, user_id))
+    cursor.execute("UPDATE users SET leave_balance = ? WHERE email = ?", (new_leave_balance, email))
 
     # Insert leave request
     cursor.execute(
-        "INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, leave_type, start_date, end_date, reason, "Pending"),
+        "INSERT INTO leave_requests (email, leave_type, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (email, leave_type, start_date, end_date, reason, "Pending"),
     )
 
     conn.commit()
     conn.close()
     return f"✅ Leave request submitted! {new_leave_balance} days remaining."
 
-# Google OAuth login
+# Streamlit UI
 st.title("🎓 Google Sign-In, Certificate & Leave System")
 
+# Google OAuth Login
 if "token" not in st.session_state:
     google = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["openid", "email", "profile"])
     authorization_url, state = google.authorization_url(AUTHORIZATION_BASE_URL, access_type="offline")
@@ -109,14 +118,19 @@ if "user" in st.session_state:
     user = st.session_state["user"]
     user_email = user["email"]
     user_name = user["name"]
-    
-    user_id, role, leave_balance = get_user_info(user_email)
 
-    save_user(user_name, user_email, role)
+    save_user(user_name, user_email)  # Save user if not exists
+    role, leave_balance = get_user_info(user_email)
 
+    # Update session for role & leave balance
+    st.session_state["role"] = role
+    st.session_state["leave_balance"] = leave_balance
+
+    # Display user info
     st.success(f"✅ Logged in as {user_name} ({user_email})")
     st.info(f"**Role: {role}** | 🏖 **Remaining Leave Balance: {leave_balance} days**")
 
+    # Generate Certificate
     if st.button("Generate Certificate"):
         pdf_buffer = BytesIO()
         c = canvas.Canvas(pdf_buffer)
@@ -127,7 +141,7 @@ if "user" in st.session_state:
         c.setFont("Helvetica", 15)
         c.drawString(220, 600, f"Role: {role}")
         c.save()
-        
+
         pdf_buffer.seek(0)
         st.download_button(label="📄 Download Certificate", data=pdf_buffer, file_name="certificate.pdf", mime="application/pdf")
 
@@ -146,3 +160,10 @@ if "user" in st.session_state:
         else:
             message = request_leave(user_email, leave_type, start_date, end_date, reason, leave_days)
             st.success(message)
+
+            # **🔄 Fix UI Update: Refresh Leave Balance After Submission**
+            role, updated_leave_balance = get_user_info(user_email)
+            st.session_state["leave_balance"] = updated_leave_balance
+
+    # **🔵 Display Updated Leave Balance in Blue Banner**
+    st.info(f"🔹 **Updated Leave Balance: {st.session_state.get('leave_balance', leave_balance)} days**")
