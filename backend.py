@@ -6,15 +6,14 @@ import pandas as pd
 import json
 import time
 import PyPDF2
-from dotenv import load_dotenv
+import streamlit as st
 from groq import Groq
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 import io
 
-# Load environment variables
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Load secrets from Streamlit secrets.toml
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
 # Initialize Flask App & Groq Client
 app = Flask(__name__)
@@ -151,256 +150,45 @@ def mentor_leave_requests():
 
     return jsonify({"requests": [dict(req) for req in requests]})
 
-# ✅ Approve Leave (Mentor Action)
-@app.route("/approve-leave", methods=["POST"])
-def approve_leave():
+# ✅ AI-Based Academic Query Handling
+@app.route("/ask-academic-query", methods=["POST"])
+def ask_academic_query():
     data = request.json
-    leave_id = data["leave_id"]
+    query = data.get("query", "")
+    response = client.chat_completion(query)
+    return jsonify({"response": response})
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE leave_requests SET status = 'approved' WHERE id = ?", (leave_id,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"message": "✅ Leave request approved."})
-
-# ✅ Reject Leave (Mentor Action)
-@app.route("/reject-leave", methods=["POST"])
-def reject_leave():
-    data = request.json
-    leave_id = data["leave_id"]
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE leave_requests SET status = 'rejected' WHERE id = ?", (leave_id,))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"message": "❌ Leave request rejected."})
-
-# ✅ Upload AI Training Data (Admin)
-@app.route("/upload-data", methods=["POST"])
-def upload_ai_data():
-    if "file" not in request.files:
-        return jsonify({"message": "❌ No file uploaded."}), 400
-
+# ✅ Upload Academic Document for Training AI
+@app.route("/upload-academic-doc", methods=["POST"])
+def upload_academic_doc():
     file = request.files["file"]
-    filename = file.filename
-
+    if not file:
+        return jsonify({"message": "No file uploaded."}), 400
+    
+    content = file.read().decode("utf-8")
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    try:
-        if filename.endswith(".csv") or filename.endswith(".xlsx"):
-            df = pd.read_csv(file) if filename.endswith(".csv") else pd.read_excel(file)
-            for _, row in df.iterrows():
-                cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (json.dumps(row.to_dict()),))
-            conn.commit()
-
-        elif filename.endswith(".json"):
-            data = json.load(file)
-            cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (json.dumps(data),))
-            conn.commit()
-
-        elif filename.endswith(".pdf"):
-            reader = PyPDF2.PdfReader(file)
-            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-            cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (text,))
-            conn.commit()
-        else:
-            return jsonify({"message": "❌ Invalid file format. Supported formats: CSV, XLSX, JSON, PDF"}), 400
-
-        conn.close()
-        return jsonify({"message": "✅ AI Training Data Uploaded Successfully."})
-
-    except Exception as e:
-        return jsonify({"message": f"❌ Error processing file: {str(e)}"}), 500
-
-# ✅ AI Academic Query Processing (Groq SDK)
-@app.route("/academic", methods=["POST"])
-def academic_query():
-    data = request.json
-    student_id = data["student_id"]
-    query = data["query"]
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT content FROM academic_docs")
-    documents = cursor.fetchall()
-    conn.close()
-
-    if not documents:
-        return jsonify({"response": "❌ No academic data available. Please upload training data."})
-
-    knowledge_base = " ".join([doc[0] for doc in documents])[:4000]
-
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "You are a helpful academic assistant."},
-                {"role": "user", "content": f"{query}\n\nContext:\n{knowledge_base}"}
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-
-        ai_response = chat_completion.choices[0].message.content
-        return jsonify({"response": ai_response})
-
-    except Exception as e:
-        return jsonify({"response": f"❌ AI Error: {str(e)}"})
-
-# ✅ Set Certificate Template API (Admin)
-@app.route("/set-template", methods=["POST"])
-def set_template():
-    if "template" not in request.files:
-        return jsonify({"message": "❌ No template file uploaded."}), 400
-
-    template_type = request.form.get("template_type")
-    if not template_type:
-        return jsonify({"message": "❌ Template type not specified."}), 400
-
-    template_file = request.files["template"]
-
-    # Save the template file
-    template_filename = f"{template_type.lower()}_template.pdf"
-    template_path = os.path.join(TEMPLATES_DIR, template_filename)
-    template_file.save(template_path)
-
-    # Update the database
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO certificate_templates (template_type, file_path) VALUES (?, ?)",
-        (template_type, template_path)
-    )
+    cursor.execute("INSERT INTO academic_docs (content) VALUES (?)", (content,))
     conn.commit()
     conn.close()
+    
+    return jsonify({"message": "✅ Document uploaded successfully."})
 
-    return jsonify({"message": f"✅ {template_type} template updated successfully."})
-
-# ✅ Generate Certificate API
-@app.route("/certificate", methods=["POST"])
+# ✅ Generate Certificate PDF
+@app.route("/generate-certificate", methods=["POST"])
 def generate_certificate():
-    # Check if it's a multipart form data (with template file)
-    if request.files and "template" in request.files:
-        student_id = request.form.get("student_id")
-        cert_type = request.form.get("cert_type")
-        template_file = request.files["template"]
+    data = request.json
+    student_name = data["student_name"]
+    certificate_type = data["certificate_type"]
+    output = io.BytesIO()
+    
+    c = canvas.Canvas(output, pagesize=letter)
+    c.drawString(100, 700, f"Certificate of {certificate_type}")
+    c.drawString(100, 650, f"Awarded to {student_name}")
+    c.save()
+    
+    output.seek(0)
+    return send_file(output, download_name=f"{certificate_type}_{student_name}.pdf", as_attachment=True)
 
-        # Use the uploaded template
-        custom_template = True
-        template_data = template_file.read()
-    else:
-        # JSON data without custom template
-        if request.is_json:
-            data = request.json
-        else:
-            data = request.form
-
-        student_id = data.get("student_id")
-        cert_type = data.get("cert_type")
-
-        # Check if there's a stored template
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT file_path FROM certificate_templates WHERE template_type = ?", (cert_type,))
-        template_record = cursor.fetchone()
-        conn.close()
-
-        if template_record and os.path.exists(template_record["file_path"]):
-            custom_template = True
-            with open(template_record["file_path"], "rb") as f:
-                template_data = f.read()
-        else:
-            custom_template = False
-
-    # Create the certificate file path
-    filename = f"{student_id}_{cert_type.lower()}_certificate.pdf"
-    filepath = os.path.join(os.getcwd(), filename)
-
-    if custom_template:
-        # Save the template temporarily to use it
-        temp_template_path = os.path.join(os.getcwd(), "temp_template.pdf")
-        with open(temp_template_path, "wb") as f:
-            f.write(template_data)
-
-        # Use PyPDF2 to modify the template
-        reader = PyPDF2.PdfReader(temp_template_path)
-        writer = PyPDF2.PdfWriter()
-
-        # Get the first page
-        page = reader.pages[0]
-
-        # Create a new PDF to overlay the data
-        overlay_bytes = io.BytesIO()
-        c = canvas.Canvas(overlay_bytes)
-
-        # Add the certificate data
-        c.setFont("Helvetica", 12)
-        c.drawString(100, 400, f"Student ID: {student_id}")
-        c.drawString(100, 380, f"Certificate Type: {cert_type}")
-        current_date = datetime.date.today().strftime("%d-%m-%Y")
-        c.drawString(100, 360, f"Date Issued: {current_date}")
-        c.save()
-
-        # Create a new PDF reader from the overlay data
-        overlay_bytes.seek(0)
-        overlay_pdf = PyPDF2.PdfReader(overlay_bytes)
-
-        # Merge the template with the overlay
-        page.merge_page(overlay_pdf.pages[0])
-        writer.add_page(page)
-
-        # Save the merged PDF
-        with open(filepath, "wb") as output_file:
-            writer.write(output_file)
-
-        # Clean up the temporary template
-        if os.path.exists(temp_template_path):
-            os.remove(temp_template_path)
-
-    else:
-        # Generate a standard certificate
-        c = canvas.Canvas(filepath)
-
-        # Set up the certificate
-        c.setTitle(f"{cert_type} Certificate")
-        c.setFont("Helvetica-Bold", 24)
-
-        # Certificate header
-        c.drawCentredString(300, 750, "ACADEMIC INSTITUTION")
-        c.setFont("Helvetica-Bold", 22)
-        c.drawCentredString(300, 700, f"{cert_type} Certificate")
-
-        # Certificate content
-        c.setFont("Helvetica", 14)
-        current_date = datetime.date.today().strftime("%d-%m-%Y")
-
-        if cert_type == "Bonafide":
-            c.drawString(50, 600, f"This is to certify that {student_id} is a bonafide student")
-            c.drawString(50, 580, "of our institution and is currently pursuing their education with us.")
-        elif cert_type == "NOC":
-            c.drawString(50, 600, f"This is to certify that {student_id} is granted a No Objection")
-            c.drawString(50, 580, "Certificate for their intended activities outside the institution.")
-
-        # Footer
-        c.drawString(50, 400, f"Date: {current_date}")
-        c.drawString(400, 400, "Signature")
-        c.drawString(400, 380, "________________")
-        c.drawString(400, 360, "Principal")
-
-        # Add a border
-        c.rect(20, 20, 555, 800, stroke=1, fill=0)
-
-        # Save the PDF
-        c.save()
-
-    # Send the file
-    try:
-        return send_file(filepath, as_attachment=True)
-    except Exception as e:
-        return jsonify({"message": f"❌ Error generating certificate: {str(e)}"}),
-# ✅ Run Server
 if __name__ == "__main__":
     app.run(debug=True)
