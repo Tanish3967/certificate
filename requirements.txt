@@ -1,8 +1,7 @@
+Flask
+pandas
 streamlit
-requests
-requests-oauthlib
-pillow
+groq
+PyPDF2
 reportlab
-pypdf2
-python-docx
-
+requests
