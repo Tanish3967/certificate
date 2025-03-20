@@ -1,12 +1,9 @@
 import streamlit as st
 import requests
-import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load API keys from secrets.toml
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 BACKEND_URL = "http://127.0.0.1:5000"
-
 
 # ✅ Login Page
 def login():
@@ -18,21 +15,21 @@ def login():
         st.session_state["username"] = username
         st.session_state["role"] = role
         st.session_state["logged_in"] = True
-        st.query_params.update(role=role)  # Updated from experimental_set_query_params
+        st.query_params.update(role=role)
 
 # ✅ Logout Function
 def logout():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.query_params.clear()  # Updated from experimental_set_query_params
-    st.rerun()  # Updated from experimental_rerun
+    st.query_params.clear()
+    st.rerun()
 
 # ✅ Navigation Bar
 def navigation_bar():
     col1, col2, col3 = st.columns([1, 3, 1])
     with col1:
         if st.button("🔄 Refresh"):
-            st.rerun()  # Updated from experimental_rerun
+            st.rerun()
     with col3:
         if st.button("🚪 Logout"):
             logout()
@@ -46,9 +43,15 @@ def student_dashboard():
     # 📚 Ask an Academic Question
     st.subheader("📚 Ask an Academic Question")
     question = st.text_input("Enter your question:")
+
     if st.button("Ask"):
         with st.spinner("🤖 Processing..."):
-            response = requests.post(f"{BACKEND_URL}/academic", json={"student_id": st.session_state["username"], "query": question})
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            response = requests.post(
+                f"{BACKEND_URL}/academic",
+                json={"student_id": st.session_state["username"], "query": question},
+                headers=headers
+            )
             if response.status_code == 200:
                 st.success(response.json().get("response", "❌ Error processing AI response."))
             else:
@@ -58,7 +61,10 @@ def student_dashboard():
     st.subheader("📝 Request Leave")
     leave_days = st.number_input("Number of Leave Days", min_value=1, step=1)
     if st.button("Apply Leave"):
-        response = requests.post(f"{BACKEND_URL}/leave", json={"student_id": st.session_state["username"], "days": leave_days})
+        response = requests.post(
+            f"{BACKEND_URL}/leave",
+            json={"student_id": st.session_state["username"], "days": leave_days}
+        )
         if response.status_code == 200:
             st.success(response.json().get("message", "❌ Error processing response."))
         else:
@@ -66,7 +72,10 @@ def student_dashboard():
 
     # 📌 Leave Status
     st.subheader("📌 Your Leave Requests")
-    response = requests.get(f"{BACKEND_URL}/student-leave-status", params={"student_id": st.session_state["username"]})
+    response = requests.get(
+        f"{BACKEND_URL}/student-leave-status",
+        params={"student_id": st.session_state["username"]}
+    )
 
     if response.status_code == 200:
         leave_requests = response.json().get("requests", [])
@@ -82,44 +91,28 @@ def student_dashboard():
     st.subheader("📜 Generate Certificate")
     cert_type = st.selectbox("Select Certificate Type:", ["Bonafide", "NOC"])
 
-    # Custom template option
-    use_custom_template = st.checkbox("Use custom template")
-    custom_template = None
-
-    if use_custom_template:
-        st.write("Upload your custom certificate template (PDF):")
-        template_file = st.file_uploader("Upload template", type=["pdf"])
-        if template_file:
-            custom_template = template_file.getvalue()
-
     if st.button("Generate Certificate"):
         payload = {
             "student_id": st.session_state["username"],
             "cert_type": cert_type
         }
-
-        files = {}
-        if custom_template:
-            files = {"template": ("template.pdf", custom_template, "application/pdf")}
-
-        if files:
-            response = requests.post(f"{BACKEND_URL}/certificate", data=payload, files=files, stream=True)
-        else:
-            response = requests.post(f"{BACKEND_URL}/certificate", json=payload, stream=True)
+        response = requests.post(f"{BACKEND_URL}/certificate", json=payload, stream=True)
 
         if response.status_code == 200:
-            # Save the generated certificate locally
             cert_filename = f"{st.session_state['username']}_certificate.pdf"
             with open(cert_filename, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
             st.success("✅ Certificate generated successfully!")
-            st.download_button("📥 Download Certificate", open(cert_filename, "rb"), file_name=cert_filename, mime="application/pdf")
-
+            st.download_button(
+                "📥 Download Certificate",
+                open(cert_filename, "rb"),
+                file_name=cert_filename,
+                mime="application/pdf"
+            )
         else:
-            st.error("❌ Error generating certificate. Please try again.")
-
+            st.error("❌ Error generating certificate.")
 
 # ✅ Mentor Dashboard
 def mentor_dashboard():
@@ -129,7 +122,10 @@ def mentor_dashboard():
 
     # 📌 Leave Requests
     st.subheader("📌 Pending Leave Requests")
-    response = requests.get(f"{BACKEND_URL}/mentor-leave-requests", params={"mentor_id": st.session_state["username"]})
+    response = requests.get(
+        f"{BACKEND_URL}/mentor-leave-requests",
+        params={"mentor_id": st.session_state["username"]}
+    )
 
     if response.status_code == 200:
         leave_requests = response.json().get("requests", [])
@@ -171,28 +167,14 @@ def admin_dashboard():
     student_id = st.text_input("Enter Student ID:")
     mentor_id = st.text_input("Enter Mentor ID:")
     if st.button("Assign Mentor"):
-        response = requests.post(f"{BACKEND_URL}/assign-mentor", json={"student_id": student_id, "mentor_id": mentor_id})
+        response = requests.post(
+            f"{BACKEND_URL}/assign-mentor",
+            json={"student_id": student_id, "mentor_id": mentor_id}
+        )
         if response.status_code == 200:
             st.success(response.json().get("message", "✅ Mentor assigned successfully!"))
         else:
             st.error("❌ Error assigning mentor.")
-
-    # 📜 Manage Certificate Templates
-    st.subheader("📜 Manage Certificate Templates")
-    template_type = st.selectbox("Template Type:", ["Bonafide", "NOC"])
-    template_file = st.file_uploader("Upload Default Template", type=["pdf"])
-
-    if template_file and st.button("Set Default Template"):
-        files = {"template": (template_file.name, template_file.getvalue())}
-        response = requests.post(
-            f"{BACKEND_URL}/set-template",
-            data={"template_type": template_type},
-            files=files
-        )
-        if response.status_code == 200:
-            st.success("✅ Default template updated successfully!")
-        else:
-            st.error("❌ Error updating template.")
 
 # ✅ Main App Logic
 if "logged_in" not in st.session_state:
